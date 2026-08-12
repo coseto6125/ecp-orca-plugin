@@ -3,7 +3,7 @@
   "id": "ecp",
   "publisher": "coseto6125",
   "name": "ECP Code Graph",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Keeps the ecp symbol graph warm for every worktree, and puts index / impact / summary one click away.",
   "author": {
     "name": "coseto6125",

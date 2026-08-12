@@ -36,6 +36,7 @@
 
 <h2>Run</h2>
 <div id="commands"></div>
+<p class="hint" id="gate">Pick a terminal above to enable these.</p>
 
 <p id="status"></p>
 
@@ -81,7 +82,18 @@
 
   const status = document.getElementById('status')
   const baseline = document.getElementById('baseline')
+  const gate = document.getElementById('gate')
+  const buttons = []
   let terminalId = null
+
+  // The target is chosen, never guessed, so the buttons stay inert until it is.
+  // Disabled with the reason in view beats enabled with a refusal after the
+  // click, which reads as a broken button rather than a deliberate gate.
+  function setTarget(id) {
+    terminalId = id
+    for (const button of buttons) button.disabled = false
+    gate.textContent = `Sending to ${id}.`
+  }
 
   function report(text, isError) {
     status.textContent = text
@@ -99,6 +111,7 @@
     const terminals = result.value.terminals
     if (terminals.length === 0) {
       container.innerHTML = '<p class="hint">This worktree has no terminal.</p>'
+      gate.textContent = 'Nothing to send to.'
       return
     }
     container.textContent = ''
@@ -110,10 +123,7 @@
       radio.value = terminal.id
       // Never preselected: the one path that presses Enter starts from an
       // explicit human choice, because no id here says "shell" or "agent".
-      radio.addEventListener('change', () => {
-        terminalId = terminal.id
-        report(`sending to ${terminal.id}`)
-      })
+      radio.addEventListener('change', () => setTarget(terminal.id))
       label.append(radio, document.createTextNode(terminal.id))
       container.append(label)
     })
@@ -128,7 +138,9 @@
     for (const command of COMMANDS) {
       const button = document.createElement('button')
       button.textContent = command.label
+      button.disabled = true
       button.addEventListener('click', () => run(command, button))
+      buttons.push(button)
       container.append(button)
     }
   }

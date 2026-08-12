@@ -54,7 +54,7 @@ plugin has none. Choices that need a person live in the panel.
 
 - **Terminal targeting is blind.** `workspace.readContext` returns terminal ids
   with no type, so nothing can tell a shell from an agent's TUI pane. The panel
-  lists the ids and lets you pick; the keyboard commands take the first terminal
+  lists the ids and keeps its buttons disabled until you pick one; the keyboard commands take the first terminal
   and send **without Enter**, so a line that lands in an agent prompt sits there
   until you decide.
 - **The panel is a launcher, not a viewer.** Panel documents run under

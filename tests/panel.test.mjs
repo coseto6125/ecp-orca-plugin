@@ -34,6 +34,12 @@ test('the panel never preselects a terminal, so Enter follows a human choice', (
   assert.match(panel, /if \(!terminalId\) return report\('pick a terminal first'/)
 })
 
+test('the run buttons are inert until a terminal is chosen', () => {
+  assert.match(panel, /button\.disabled = true\n\s+button\.addEventListener/, 'buttons must start disabled')
+  assert.match(panel, /function setTarget\(id\) \{[\s\S]*?for \(const button of buttons\) button\.disabled = false/)
+  assert.match(panel, /id="gate"/, 'the reason the buttons are inert must be on the page, not in an error')
+})
+
 test('the panel refuses a baseline that could end the shell command', () => {
   const pattern = /const REF = (\/.+\/)\n/.exec(panel)
   assert.ok(pattern, 'no ref validation found in the panel')
