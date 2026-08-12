@@ -4,7 +4,7 @@
   "private": true,
   "description": "Orca plugin for the ecp code graph. Development scripts only; the plugin itself has no dependencies.",
   "scripts": {
-    "test": "node --test tests/worker.test.mjs",
+    "test": "node --test tests/worker.test.mjs tests/panel.test.mjs",
     "validate": "node scripts/validate.mjs",
     "smoke": "node scripts/host-smoke.mjs"
   },

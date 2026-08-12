@@ -11,11 +11,11 @@
   "pluginApi": 1,
   "main": "worker/main.mjs",
   "contributes": {
+    "panels": [{ "id": "console", "title": "ECP", "entry": "panel/index.html" }],
     "commands": [
       { "id": "index-worktree", "title": "ECP: Index this worktree", "context": "worktree" },
       { "id": "impact-baseline", "title": "ECP: Impact vs base branch", "context": "worktree" },
-      { "id": "doctor", "title": "ECP: Doctor", "context": "global" },
-      { "id": "install-cli", "title": "ECP: Install or update the CLI", "context": "worktree" }
+      { "id": "doctor", "title": "ECP: Doctor", "context": "worktree" }
     ],
     "events": [{ "on": "worktree.created" }, { "on": "worktree.removed" }],
     "keybindings": [{ "command": "index-worktree", "key": "Mod+Alt+E", "when": "worktree" }]
@@ -25,7 +25,6 @@
     { "kind": "terminal:send" },
     { "kind": "notifications:show" },
     { "kind": "storage" },
-    { "kind": "events:subscribe" },
-    { "kind": "settings:own" }
+    { "kind": "events:subscribe" }
   ]
 }

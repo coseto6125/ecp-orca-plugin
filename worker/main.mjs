@@ -1,64 +1,93 @@
 import { execFile } from 'node:child_process'
 import { existsSync } from 'node:fs'
+import { join } from 'node:path'
+import { createHash } from 'node:crypto'
 
 /**
  * Orca plugin worker for ecp.
  *
- * Two transports, picked per job:
+ * The worker owns one job: keep the graph warm. It spawns ecp itself, which it
+ * may do because `main` is consented as trusted Node code, and it only does so
+ * for a worktree path that resolves on this machine.
  *
- *   exec      the worker is trusted Node, so it can spawn ecp itself. Used for
- *             work with no output worth reading (keeping the index warm). Needs
- *             a worktree path, which only arrives on `worktree.created`.
- *   terminal  host API `terminal.sendText`. Used for every command whose output
- *             the human or the agent must see, because a worker can only report
- *             through a 1000-char notification.
+ * It deliberately owns no configuration. This Orca build has no editor for
+ * plugin-defined settings (`settings.get`/`settings.set` is a private key-value
+ * store with no UI), so a knob read here would be a knob nobody can turn. What
+ * needs a choice lives in the panel, where a person makes it.
+ *
+ * Every command sends its text without pressing Enter. `workspace.readContext`
+ * returns terminal ids with no type, so neither the worker nor the panel can
+ * prove a target is a shell rather than an agent's prompt; the line lands where
+ * the person can read it and decide.
  */
 
 const INDEX_CACHE_KEY = 'indexedWorktrees'
+const INDEX_CACHE_LIMIT = 64
 const INDEX_TTL_MS = 6 * 60 * 60 * 1000
 const INDEX_TIMEOUT_MS = 4 * 60 * 1000
-const INSTALL_COMMAND =
-  'curl -fsSL https://raw.githubusercontent.com/coseto6125/egent-code-plexus/main/install.sh | bash'
+const PROBE_TIMEOUT_MS = 30 * 1000
+const NOTIFICATION_BODY_LIMIT = 900
+const TERMINAL_TEXT_LIMIT = 4096
+
+/**
+ * Two running indexes saturate the disk already, and the host SIGKILLs a worker
+ * holding 64 pending events. Bounding the queue keeps a bulk worktree import
+ * well under that ceiling: anything past the queue acks immediately.
+ */
+const MAX_CONCURRENT_INDEXES = 2
+const MAX_QUEUED_INDEXES = 8
+
+const runningChildren = new Set()
+
+/**
+ * Test seam. The host forks the worker with a fixed environment allowlist
+ * (PATH, HOME, locale, temp dirs), so this variable cannot reach a real worker
+ * and the name is always `ecp` in production.
+ */
+const ECP = process.env.ECP_BINARY ?? 'ecp'
 
 export default async function activate(context) {
   const ecp = new EcpPlugin(context)
-  context.commands.register('index-worktree', () => ecp.indexFocusedWorktree())
-  context.commands.register('impact-baseline', () => ecp.impactAgainstBaseline())
-  context.commands.register('doctor', () => ecp.doctor())
-  context.commands.register('install-cli', () => ecp.installCli())
+  context.commands.register('index-worktree', () => ecp.sendToTerminal('ecp admin index --repo .'))
+  context.commands.register('impact-baseline', () => ecp.sendToTerminal('ecp impact --baseline origin/HEAD'))
+  context.commands.register('doctor', () => ecp.sendToTerminal('ecp doctor'))
   context.events.on('worktree.created', (payload) => ecp.onWorktreeCreated(payload))
   context.events.on('worktree.removed', (payload) => ecp.onWorktreeRemoved(payload))
+}
+
+/** Host contract: called before the worker exits, so orphaned indexes stop here. */
+export function deactivate() {
+  for (const child of runningChildren) child.kill('SIGTERM')
+  runningChildren.clear()
 }
 
 class EcpPlugin {
   constructor(context) {
     this.host = context.host
     this.log = context.log
-    this.granted = new Set((context.grantedCapabilities ?? []).map((capability) => capability.kind ?? capability))
-  }
-
-  has(capability) {
-    return this.granted.size === 0 || this.granted.has(capability)
+    this.granted = new Set(
+      (context.grantedCapabilities ?? []).map((capability) =>
+        typeof capability === 'string' ? capability : capability.kind
+      )
+    )
+    this.binaries = new Map()
+    this.activeIndexes = 0
+    this.queuedIndexes = 0
+    this.waiters = []
   }
 
   async call(method, params, capability) {
-    if (!this.has(capability)) throw new Error(`${method} needs the ${capability} capability`)
+    if (!this.granted.has(capability)) throw new Error(`${method} needs the ${capability} capability`)
     return this.host.call(method, params)
-  }
-
-  async settings() {
-    try {
-      const result = await this.call('settings.get', {}, 'settings:own')
-      return result?.settings ?? {}
-    } catch (error) {
-      this.log(`settings unavailable: ${message(error)}`)
-      return {}
-    }
   }
 
   async notify(title, body) {
     try {
-      await this.call('notifications.show', { title, body }, 'notifications:show')
+      await this.call(
+        'notifications.show',
+        { title, body: body === undefined ? undefined : body.slice(0, NOTIFICATION_BODY_LIMIT) },
+        'notifications:show'
+      )
     } catch (error) {
       this.log(`${title}: ${body ?? ''} (${message(error)})`)
     }
@@ -67,71 +96,103 @@ class EcpPlugin {
   /* ---------------------------------------------------------------- events */
 
   async onWorktreeCreated(payload) {
-    const settings = await this.settings()
-    if (settings.autoIndex === false) return
-    const plan = execPlan(payload.path, settings)
-    if (!plan) {
-      this.log(`no local ecp for ${payload.path}; skipping auto-index`)
-      return
-    }
+    const plan = execPlan(payload.path)
+    if (!plan) return this.log(`${payload.path} is not a repository this machine can index`)
     if (await this.isFresh(payload.path)) return
-    try {
-      await runCommand(plan.command, [...plan.prefix, 'admin', 'index', '--repo', plan.repo], INDEX_TIMEOUT_MS)
-      await this.markFresh(payload.path)
-      await this.notify('ecp index ready', `${payload.branch || payload.path} is indexed.`)
-    } catch (error) {
-      await this.notify('ecp index failed', message(error).slice(0, 900))
+    if (this.queuedIndexes >= MAX_QUEUED_INDEXES) {
+      return this.log(`index queue is full; skipping ${payload.path}`)
     }
+    await this.enqueue(() => this.index(plan, payload))
   }
 
   async onWorktreeRemoved(payload) {
     const cache = await this.readCache()
-    if (!(payload.path in cache)) return
-    delete cache[payload.path]
+    const key = cacheKey(payload.path)
+    if (!(key in cache)) return
+    delete cache[key]
     await this.writeCache(cache)
   }
 
-  /* -------------------------------------------------------------- commands */
+  /* --------------------------------------------------------------- indexing */
 
-  async indexFocusedWorktree() {
-    return this.sendToTerminal('ecp admin index --repo .')
+  /** Counting semaphore, FIFO. Callers past MAX_QUEUED_INDEXES never get here. */
+  async enqueue(job) {
+    this.queuedIndexes += 1
+    await this.acquire()
+    this.queuedIndexes -= 1
+    try {
+      await job()
+    } finally {
+      this.release()
+    }
   }
 
-  async impactAgainstBaseline() {
-    const settings = await this.settings()
-    const baseline = typeof settings.baseline === 'string' && settings.baseline ? settings.baseline : 'origin/main'
-    return this.sendToTerminal(`ecp impact --baseline ${baseline}`)
+  acquire() {
+    if (this.activeIndexes < MAX_CONCURRENT_INDEXES) {
+      this.activeIndexes += 1
+      return Promise.resolve()
+    }
+    return new Promise((resolve) => this.waiters.push(resolve))
   }
 
-  async doctor() {
-    return this.sendToTerminal('ecp doctor')
+  release() {
+    const next = this.waiters.shift()
+    if (next) next()
+    else this.activeIndexes -= 1
   }
 
-  async installCli() {
-    return this.sendToTerminal(INSTALL_COMMAND)
+  async index(plan, payload) {
+    const prefix = await this.resolveBinary(plan)
+    if (!prefix) {
+      return this.notify('ecp not found', `Install ecp on ${plan.where}, then reopen this worktree.`)
+    }
+    try {
+      await runCommand(plan.command, [...prefix, 'admin', 'index', '--repo', plan.repo], INDEX_TIMEOUT_MS)
+      await this.markFresh(payload.path)
+      await this.notify('ecp index ready', `${payload.branch || payload.path} is indexed.`)
+    } catch (error) {
+      await this.notify('ecp index failed', message(error))
+    }
   }
 
   /**
-   * The host has no "active terminal" write target on purpose, so a terminal is
-   * addressed by id. `workspace.readContext` does not say which id is a shell
-   * and which is an agent TUI, so the index is a setting the user can correct.
+   * `wsl.exe -- ecp` runs without a login shell, so a non-root install under
+   * ~/.local/bin is off PATH there while it works fine in a terminal. Resolve
+   * the absolute path once per distro through a login shell, then keep argv
+   * split so paths with spaces stay one token.
    */
-  async sendToTerminal(text) {
-    const context = await this.call('workspace.readContext', {}, 'workspace:read')
-    if (!context) {
-      await this.notify('ecp', 'No focused worktree.')
-      return { sent: false }
+  async resolveBinary(plan) {
+    if (!plan.distro) return []
+    if (this.binaries.has(plan.distro)) return this.binaries.get(plan.distro)
+    let resolved = null
+    try {
+      const output = await runCommand(
+        plan.command,
+        ['-d', plan.distro, '--', 'bash', '-lc', `command -v ${ECP}`],
+        PROBE_TIMEOUT_MS
+      )
+      const path = output.split('\n').map((line) => line.trim()).filter(Boolean)[0]
+      resolved = path ? ['-d', plan.distro, '--', path] : null
+    } catch (error) {
+      this.log(`ecp lookup failed in ${plan.distro}: ${message(error)}`)
     }
-    const settings = await this.settings()
-    const index = Number.isInteger(settings.terminalIndex) ? settings.terminalIndex : 0
-    const terminal = context.terminals[index]
+    this.binaries.set(plan.distro, resolved)
+    return resolved
+  }
+
+  /* -------------------------------------------------------------- terminals */
+
+  async sendToTerminal(text) {
+    if (text.length > TERMINAL_TEXT_LIMIT) return { sent: false, reason: 'too long' }
+    const context = await this.call('workspace.readContext', {}, 'workspace:read')
+    const terminal = context?.terminals?.[0]
     if (!terminal) {
-      await this.notify('ecp', `Worktree ${context.displayName} has no terminal at index ${index}.`)
-      return { sent: false }
+      await this.notify('ecp', 'This worktree has no terminal to type into.')
+      return { sent: false, reason: 'no terminal' }
     }
     const result = await this.call(
       'terminal.sendText',
-      { terminalId: terminal.id, text, enter: settings.terminalEnter !== false },
+      { terminalId: terminal.id, text, enter: false },
       'terminal:send'
     )
     return { sent: result?.accepted === true, text }
@@ -158,14 +219,14 @@ class EcpPlugin {
   }
 
   async isFresh(path) {
-    const stamp = (await this.readCache())[path]
+    const stamp = (await this.readCache())[cacheKey(path)]
     return typeof stamp === 'number' && Date.now() - stamp < INDEX_TTL_MS
   }
 
   async markFresh(path) {
     const cache = await this.readCache()
-    cache[path] = Date.now()
-    await this.writeCache(cache)
+    cache[cacheKey(path)] = Date.now()
+    await this.writeCache(prune(cache))
   }
 }
 
@@ -174,24 +235,44 @@ class EcpPlugin {
  * path is only executable here when it resolves on this filesystem. The one
  * exception worth carrying is Windows plus WSL, where the UNC form names the
  * distro and the rest of the path is already the Linux path.
+ *
+ * Requiring a `.git` entry is a weak check on purpose: the event payload
+ * carries no host identity, so an SSH worktree whose path also exists locally
+ * is indistinguishable from a local one. The check rejects the common accident,
+ * not the deliberate collision.
  */
-export function execPlan(path, settings = {}) {
-  const ecp = typeof settings.ecpPath === 'string' && settings.ecpPath ? settings.ecpPath : 'ecp'
-  const wsl = /^\\\\wsl(?:\$|\.localhost)\\([^\\]+)\\(.*)$/.exec(path)
+export function execPlan(path) {
+  const wsl = /^\\\\wsl(?:\$|\.localhost)\\([^\\]+)\\(.*)$/i.exec(path)
   if (wsl) {
-    const distro = settings.wslDistro || wsl[1]
-    return { command: 'wsl.exe', prefix: ['-d', distro, '--', ecp], repo: `/${wsl[2].replace(/\\/g, '/')}` }
+    return {
+      command: 'wsl.exe',
+      distro: wsl[1],
+      repo: `/${wsl[2].replace(/\\/g, '/')}`,
+      where: wsl[1]
+    }
   }
-  if (!existsSync(path)) return null
-  return { command: ecp, prefix: [], repo: path }
+  if (!existsSync(join(path, '.git'))) return null
+  return { command: ECP, distro: null, repo: path, where: 'this machine' }
+}
+
+/** Keeps the stored value small and bounded, whatever the paths look like. */
+export function cacheKey(path) {
+  return createHash('sha256').update(path).digest('hex').slice(0, 16)
+}
+
+function prune(cache) {
+  const entries = Object.entries(cache).sort(([, a], [, b]) => b - a)
+  return Object.fromEntries(entries.slice(0, INDEX_CACHE_LIMIT))
 }
 
 function runCommand(command, args, timeout) {
   return new Promise((resolve, reject) => {
-    execFile(command, args, { timeout, windowsHide: true }, (error, stdout, stderr) => {
+    const child = execFile(command, args, { timeout, windowsHide: true }, (error, stdout, stderr) => {
+      runningChildren.delete(child)
       if (error) reject(new Error(`${command} ${args.join(' ')}: ${stderr || error.message}`))
       else resolve(stdout)
     })
+    runningChildren.add(child)
   })
 }
 

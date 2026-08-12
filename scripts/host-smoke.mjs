@@ -1,5 +1,5 @@
 import { fork } from 'node:child_process'
-import { mkdtempSync, writeFileSync, chmodSync, readFileSync, existsSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync, chmodSync, readFileSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import assert from 'node:assert/strict'
@@ -33,7 +33,6 @@ const stubEcp = join(workspace, 'ecp-stub.sh')
 writeFileSync(stubEcp, `#!/bin/sh\nprintf '%s\\n' "$*" >> ${JSON.stringify(marker)}\n`)
 chmodSync(stubEcp, 0o755)
 
-let settings = { ecpPath: stubEcp }
 const hostCalls = []
 const notifications = []
 const storage = new Map()
@@ -43,7 +42,9 @@ const child = fork(hostEntry(resources), [], {
   execArgv: [],
   serialization: 'advanced',
   stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
-  env: { PATH: process.env.PATH, HOME: process.env.HOME }
+  // A real host forks with a fixed allowlist that cannot carry ECP_BINARY; the
+  // smoke sets it so the worker spawns a stub instead of the machine's ecp.
+  env: { PATH: process.env.PATH, HOME: process.env.HOME, ECP_BINARY: stubEcp }
 })
 child.stderr.setEncoding('utf8')
 child.stderr.on('data', (line) => console.error(`[worker stderr] ${line.trim()}`))
@@ -93,7 +94,6 @@ async function handleHostCall({ callId, method, params }) {
 
 function respond(method, params) {
   switch (method) {
-    case 'settings.get': return { settings }
     case 'workspace.readContext': return { branch: 'feat/x', displayName: 'ecp-orca-plugin', terminals }
     case 'terminal.sendText': return { accepted: true }
     case 'notifications.show': notifications.push(params); return { delivered: true }
@@ -134,19 +134,18 @@ const workerCommands = manifest.contributes.commands.filter((command) => command
 assert.deepEqual(registered.sort(), workerCommands.map((command) => command.id).sort())
 console.log(`ok  ready with ${registered.length} commands`)
 
-settings = { ecpPath: stubEcp, terminalIndex: 1 }
 const doctor = await invokeCommand('doctor')
 assert.equal(doctor.ok, true, doctor.error)
 assert.deepEqual(doctor.value, { sent: true, text: 'ecp doctor' })
 const sent = hostCalls.filter((call) => call.method === 'terminal.sendText').at(-1)
-assert.equal(sent.params.terminalId, 'shell')
-console.log(`ok  doctor typed ${JSON.stringify(sent.params.text)} into terminal ${sent.params.terminalId}`)
+assert.equal(sent.params.enter, false, 'a blind terminal target must not execute the line')
+console.log(`ok  doctor typed ${JSON.stringify(sent.params.text)} into ${sent.params.terminalId} without Enter`)
 
-settings = { ecpPath: stubEcp, baseline: 'origin/release' }
 const impact = await invokeCommand('impact-baseline')
-assert.deepEqual(impact.value, { sent: true, text: 'ecp impact --baseline origin/release' })
-console.log('ok  impact honoured the baseline setting')
+assert.deepEqual(impact.value, { sent: true, text: 'ecp impact --baseline origin/HEAD' })
+console.log('ok  impact sent a ref no panel input could have injected into')
 
+mkdirSync(join(workspace, '.git'))
 const created = { worktreeId: 'w-1', path: workspace, branch: 'feat/x' }
 await deliverEvent('worktree.created', created)
 assert.ok(existsSync(marker), 'auto-index never spawned the ecp executable')

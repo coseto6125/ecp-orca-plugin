@@ -1,0 +1,147 @@
+<style>
+  body {
+    margin: 0;
+    padding: 12px;
+    font: 13px/1.5 ui-sans-serif, system-ui, sans-serif;
+    color: var(--foreground);
+    background: var(--background);
+  }
+  h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted-foreground); margin: 16px 0 6px; }
+  h2:first-child { margin-top: 0; }
+  label { display: flex; gap: 6px; align-items: center; padding: 3px 0; word-break: break-all; }
+  input[type="text"] {
+    width: 100%; box-sizing: border-box; padding: 5px 7px;
+    border: 1px solid var(--border); border-radius: var(--radius);
+    background: var(--input); color: var(--foreground); font-family: ui-monospace, monospace;
+  }
+  button {
+    display: block; width: 100%; margin-top: 6px; padding: 6px 9px; text-align: left;
+    border: 1px solid var(--border); border-radius: var(--radius);
+    background: var(--secondary); color: var(--secondary-foreground);
+    font-family: ui-monospace, monospace; font-size: 12px; cursor: pointer;
+  }
+  button:hover:enabled { background: var(--accent); color: var(--accent-foreground); }
+  button:disabled { opacity: .5; cursor: default; }
+  #status { margin-top: 12px; color: var(--muted-foreground); word-break: break-all; }
+  #status.error { color: var(--destructive); }
+  .hint { color: var(--muted-foreground); margin: 4px 0 0; }
+</style>
+
+<h2>Terminal</h2>
+<div id="terminals"><p class="hint">Reading the focused worktree…</p></div>
+
+<h2>Baseline</h2>
+<input type="text" id="baseline" value="origin/HEAD" spellcheck="false" autocomplete="off">
+<p class="hint">Used by impact. Letters, digits and <code>. _ / -</code> only.</p>
+
+<h2>Run</h2>
+<div id="commands"></div>
+
+<p id="status"></p>
+
+<script>
+  'use strict'
+
+  // The host answers on the same window; a request carries its own correlation id.
+  const pending = new Map()
+  let nextRequestId = 0
+
+  window.addEventListener('message', (event) => {
+    const data = event.data
+    if (!data || data.type !== 'orca-panel-action-result') return
+    const settle = pending.get(data.requestId)
+    if (!settle) return
+    pending.delete(data.requestId)
+    settle(data)
+  })
+
+  function callHost(action, params) {
+    const requestId = `r${nextRequestId++}`
+    return new Promise((resolve) => {
+      pending.set(requestId, resolve)
+      window.parent.postMessage({ type: 'orca-panel-action', requestId, action, params }, '*')
+    })
+  }
+
+  // A git ref is not a shell word. Refuse anything that could end the command.
+  const REF = /^[A-Za-z0-9._\/-]{1,128}$/
+
+  const COMMANDS = [
+    { label: 'ecp admin index --repo .', line: () => 'ecp admin index --repo .' },
+    { label: 'ecp impact --baseline …', line: (ref) => `ecp impact --baseline ${ref}`, needsRef: true },
+    { label: 'ecp doctor', line: () => 'ecp doctor' },
+    {
+      // The published release artifact, not a branch file: a line typed into a
+      // shell should not be whatever `main` happens to hold at that moment.
+      label: 'install or update ecp',
+      line: () =>
+        'curl -sSfL https://github.com/coseto6125/egent-code-plexus/releases/latest/download/install.sh | sh'
+    }
+  ]
+
+  const status = document.getElementById('status')
+  const baseline = document.getElementById('baseline')
+  let terminalId = null
+
+  function report(text, isError) {
+    status.textContent = text
+    status.className = isError ? 'error' : ''
+  }
+
+  async function loadTerminals() {
+    const result = await callHost('workspace.readContext', {})
+    const container = document.getElementById('terminals')
+    if (!result.ok) return report(result.error || 'could not read the worktree', true)
+    if (!result.value) {
+      container.innerHTML = '<p class="hint">No focused worktree.</p>'
+      return
+    }
+    const terminals = result.value.terminals
+    if (terminals.length === 0) {
+      container.innerHTML = '<p class="hint">This worktree has no terminal.</p>'
+      return
+    }
+    container.textContent = ''
+    terminals.forEach((terminal, index) => {
+      const label = document.createElement('label')
+      const radio = document.createElement('input')
+      radio.type = 'radio'
+      radio.name = 'terminal'
+      radio.value = terminal.id
+      radio.checked = index === 0
+      radio.addEventListener('change', () => { terminalId = terminal.id })
+      label.append(radio, document.createTextNode(terminal.id))
+      container.append(label)
+    })
+    terminalId = terminals[0].id
+    const hint = document.createElement('p')
+    hint.className = 'hint'
+    hint.textContent = `${result.value.displayName} · ${result.value.branch}. Orca does not say which of these is a shell, so pick the one you meant.`
+    container.append(hint)
+  }
+
+  function renderCommands() {
+    const container = document.getElementById('commands')
+    for (const command of COMMANDS) {
+      const button = document.createElement('button')
+      button.textContent = command.label
+      button.addEventListener('click', () => run(command, button))
+      container.append(button)
+    }
+  }
+
+  async function run(command, button) {
+    if (!terminalId) return report('pick a terminal first', true)
+    const ref = baseline.value.trim()
+    if (command.needsRef && !REF.test(ref)) return report(`not a usable ref: ${ref}`, true)
+    const text = command.line(ref)
+    button.disabled = true
+    const result = await callHost('terminal.sendText', { terminalId, text, enter: true })
+    button.disabled = false
+    if (!result.ok) return report(result.error || 'the host refused the call', true)
+    report(result.value && result.value.accepted ? `sent: ${text}` : 'the terminal refused the text', !(result.value && result.value.accepted))
+  }
+
+  renderCommands()
+  loadTerminals()
+</script>

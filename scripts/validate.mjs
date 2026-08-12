@@ -1,5 +1,6 @@
-import { readFileSync, existsSync } from 'node:fs'
-import { join } from 'node:path'
+import { readFileSync, realpathSync, statSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
+import { join, resolve, relative, isAbsolute, sep } from 'node:path'
 import { orcaRequire, orcaResources, repoRoot, sharedPlugins } from './orca.mjs'
 
 /**
@@ -30,8 +31,39 @@ if (manifest && marketplace) {
       fail(`${plugin.id} uses a category this Orca build hides`)
     }
   }
-  for (const artifact of [manifest.main, ...manifest.contributes.panels.map((panel) => panel.entry)]) {
-    if (artifact && !existsSync(join(repoRoot, artifact))) fail(`declared artifact missing: ${artifact}`)
+  // The host resolves every declared artifact through realpath and rejects a
+  // directory, a symlink out of the tree, or an oversized file. Existence alone
+  // passes here and fails at install, so mirror the real checks.
+  const artifacts = [
+    manifest.main && { label: 'worker entry', path: manifest.main, maxBytes: 50 * 1024 * 1024 },
+    ...manifest.contributes.panels.map((panel) => ({
+      label: `panel "${panel.id}" entry`,
+      path: panel.entry,
+      maxBytes: 10 * 1024 * 1024
+    }))
+  ].filter(Boolean)
+  const rootReal = realpathSync(repoRoot)
+  for (const artifact of artifacts) {
+    try {
+      const real = realpathSync(resolve(repoRoot, ...artifact.path.split(/[\\/]/)))
+      const fromRoot = relative(rootReal, real)
+      if (!fromRoot || isAbsolute(fromRoot) || fromRoot === '..' || fromRoot.startsWith(`..${sep}`)) {
+        throw new Error('resolves outside the plugin directory')
+      }
+      const stat = statSync(real)
+      if (!stat.isFile()) throw new Error('is not a regular file')
+      if (stat.size > artifact.maxBytes) throw new Error(`exceeds the ${artifact.maxBytes}-byte artifact limit`)
+    } catch (error) {
+      fail(`${artifact.label} ${artifact.path}: ${error.message}`)
+    }
+  }
+
+  // A marketplace install resolves the listed ref to a commit before it clones,
+  // so a listing that names a ref this repo has not published cannot install.
+  for (const plugin of marketplace.plugins) {
+    if (!refExists(plugin.source.ref)) {
+      fail(`orca-marketplace.json lists ${plugin.id} at ref ${plugin.source.ref}, which this repo has no tag or branch for`)
+    }
   }
 }
 
@@ -48,4 +80,13 @@ function check(file, schema) {
 function fail(line) {
   failed = true
   console.error(line)
+}
+
+function refExists(ref) {
+  try {
+    execFileSync('git', ['-C', repoRoot, 'rev-parse', '--verify', '--quiet', `${ref}^{commit}`], { stdio: 'ignore' })
+    return true
+  } catch {
+    return false
+  }
 }
