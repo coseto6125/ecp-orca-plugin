@@ -102,18 +102,21 @@
       return
     }
     container.textContent = ''
-    terminals.forEach((terminal, index) => {
+    terminals.forEach((terminal) => {
       const label = document.createElement('label')
       const radio = document.createElement('input')
       radio.type = 'radio'
       radio.name = 'terminal'
       radio.value = terminal.id
-      radio.checked = index === 0
-      radio.addEventListener('change', () => { terminalId = terminal.id })
+      // Never preselected: the one path that presses Enter starts from an
+      // explicit human choice, because no id here says "shell" or "agent".
+      radio.addEventListener('change', () => {
+        terminalId = terminal.id
+        report(`sending to ${terminal.id}`)
+      })
       label.append(radio, document.createTextNode(terminal.id))
       container.append(label)
     })
-    terminalId = terminals[0].id
     const hint = document.createElement('p')
     hint.className = 'hint'
     hint.textContent = `${result.value.displayName} · ${result.value.branch}. Orca does not say which of these is a shell, so pick the one you meant.`

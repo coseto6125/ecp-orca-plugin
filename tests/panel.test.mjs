@@ -29,6 +29,11 @@ test('the panel loads nothing over the network, which the CSP would block anyway
   }
 })
 
+test('the panel never preselects a terminal, so Enter follows a human choice', () => {
+  assert.ok(!/radio\.checked\s*=/.test(panel), 'a preselected radio makes the first send blind')
+  assert.match(panel, /if \(!terminalId\) return report\('pick a terminal first'/)
+})
+
 test('the panel refuses a baseline that could end the shell command', () => {
   const pattern = /const REF = (\/.+\/)\n/.exec(panel)
   assert.ok(pattern, 'no ref validation found in the panel')
