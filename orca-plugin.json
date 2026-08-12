@@ -1,0 +1,31 @@
+{
+  "manifestVersion": 1,
+  "id": "ecp",
+  "publisher": "coseto6125",
+  "name": "ECP Code Graph",
+  "version": "0.1.0",
+  "description": "Keeps the ecp symbol graph warm for every worktree, and puts index / impact / doctor on a keystroke.",
+  "author": { "name": "coseto6125", "url": "https://github.com/coseto6125" },
+  "repository": "https://github.com/coseto6125/ecp-orca-plugin",
+  "engines": { "orca": ">=1.4.0" },
+  "pluginApi": 1,
+  "main": "worker/main.mjs",
+  "contributes": {
+    "commands": [
+      { "id": "index-worktree", "title": "ECP: Index this worktree", "context": "worktree" },
+      { "id": "impact-baseline", "title": "ECP: Impact vs base branch", "context": "worktree" },
+      { "id": "doctor", "title": "ECP: Doctor", "context": "global" },
+      { "id": "install-cli", "title": "ECP: Install or update the CLI", "context": "worktree" }
+    ],
+    "events": [{ "on": "worktree.created" }, { "on": "worktree.removed" }],
+    "keybindings": [{ "command": "index-worktree", "key": "Mod+Alt+E", "when": "worktree" }]
+  },
+  "capabilities": [
+    { "kind": "workspace:read" },
+    { "kind": "terminal:send" },
+    { "kind": "notifications:show" },
+    { "kind": "storage" },
+    { "kind": "events:subscribe" },
+    { "kind": "settings:own" }
+  ]
+}
