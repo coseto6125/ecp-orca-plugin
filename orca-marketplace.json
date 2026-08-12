@@ -7,10 +7,12 @@
       "source": {
         "kind": "git",
         "url": "https://github.com/coseto6125/ecp-orca-plugin.git",
-        "ref": "v0.1.0"
+        "ref": "v0.1.1"
       },
       "description": "Symbol-level code graph for AI agents: warm index per worktree, impact on a keystroke.",
-      "categories": ["code-intelligence"]
+      "categories": [
+        "code-intelligence"
+      ]
     }
   ]
 }

@@ -50,7 +50,7 @@ export default async function activate(context) {
   const ecp = new EcpPlugin(context)
   context.commands.register('index-worktree', () => ecp.sendToTerminal('ecp admin index --repo .'))
   context.commands.register('impact-baseline', () => ecp.sendToTerminal('ecp impact --baseline origin/HEAD'))
-  context.commands.register('doctor', () => ecp.sendToTerminal('ecp doctor'))
+  context.commands.register('summary', () => ecp.sendToTerminal('ecp summary'))
   context.events.on('worktree.created', (payload) => ecp.onWorktreeCreated(payload))
   context.events.on('worktree.removed', (payload) => ecp.onWorktreeRemoved(payload))
 }

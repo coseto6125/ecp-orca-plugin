@@ -1,7 +1,7 @@
 # ECP Code Graph — Orca plugin
 
 Keeps the [ecp](https://github.com/coseto6125/egent-code-plexus) symbol graph warm for
-every worktree Orca creates, and puts index / impact / doctor one click away.
+every worktree Orca creates, and puts index / impact / summary one click away.
 
 Requires the `ecp` CLI on the machine that holds the worktree, and Orca >= 1.4.0.
 The plugin does not install ecp; its panel can type the install line for you.
@@ -29,10 +29,10 @@ this repo. Those are desktop paths, so a WSL clone is
 | Trigger | Transport | Command |
 |---|---|---|
 | Worktree created | worker spawns ecp | `ecp admin index --repo <path>` |
-| Panel button | terminal you picked, with Enter | index / impact / doctor / install ecp |
+| Panel button | terminal you picked, with Enter | index / impact / summary / install ecp |
 | `ECP: Index this worktree` (`Mod+Alt+E`) | first terminal, no Enter | `ecp admin index --repo .` |
 | `ECP: Impact vs base branch` | first terminal, no Enter | `ecp impact --baseline origin/HEAD` |
-| `ECP: Doctor` | first terminal, no Enter | `ecp doctor` |
+| `ECP: Index health` | first terminal, no Enter | `ecp summary` |
 
 Auto-indexing runs in the worker because nobody needs to read its output. Two
 indexes run at a time and eight more may queue; past that, an event is logged and

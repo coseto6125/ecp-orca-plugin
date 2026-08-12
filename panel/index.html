@@ -69,7 +69,7 @@
   const COMMANDS = [
     { label: 'ecp admin index --repo .', line: () => 'ecp admin index --repo .' },
     { label: 'ecp impact --baseline …', line: (ref) => `ecp impact --baseline ${ref}`, needsRef: true },
-    { label: 'ecp doctor', line: () => 'ecp doctor' },
+    { label: 'ecp summary', line: () => 'ecp summary' },
     {
       // The published release artifact, not a branch file: a line typed into a
       // shell should not be whatever `main` happens to hold at that moment.

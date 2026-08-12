@@ -63,7 +63,7 @@ function repoAt(prefix = 'ecp-orca-') {
 test('activate registers every contributed command and event', async () => {
   const context = fakeContext()
   await activate(context)
-  assert.deepEqual([...context.commands.handlers.keys()].sort(), ['doctor', 'impact-baseline', 'index-worktree'])
+  assert.deepEqual([...context.commands.handlers.keys()].sort(), ['impact-baseline', 'index-worktree', 'summary'])
   assert.deepEqual([...context.events.handlers.keys()].sort(), ['worktree.created', 'worktree.removed'])
 })
 
@@ -80,7 +80,7 @@ test('commands type into a terminal without pressing Enter', async () => {
 test('a command reports instead of throwing when the worktree has no terminal', async () => {
   const context = fakeContext({ terminals: [] })
   await activate(context)
-  assert.deepEqual(await context.commands.handlers.get('doctor')(), { sent: false, reason: 'no terminal' })
+  assert.deepEqual(await context.commands.handlers.get('summary')(), { sent: false, reason: 'no terminal' })
   assert.ok(context.calls.some((call) => call.method === 'notifications.show'))
 })
 
@@ -88,7 +88,7 @@ test('an ungranted capability fails closed rather than calling the host', async 
   const context = fakeContext({ capabilities: ['storage'] })
   await activate(context)
   await assert.rejects(
-    () => context.commands.handlers.get('doctor')(),
+    () => context.commands.handlers.get('summary')(),
     /workspace.readContext needs the workspace:read capability/
   )
   assert.deepEqual(context.calls, [])

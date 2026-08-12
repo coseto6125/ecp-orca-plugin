@@ -134,12 +134,12 @@ const workerCommands = manifest.contributes.commands.filter((command) => command
 assert.deepEqual(registered.sort(), workerCommands.map((command) => command.id).sort())
 console.log(`ok  ready with ${registered.length} commands`)
 
-const doctor = await invokeCommand('doctor')
-assert.equal(doctor.ok, true, doctor.error)
-assert.deepEqual(doctor.value, { sent: true, text: 'ecp doctor' })
+const summary = await invokeCommand('summary')
+assert.equal(summary.ok, true, summary.error)
+assert.deepEqual(summary.value, { sent: true, text: 'ecp summary' })
 const sent = hostCalls.filter((call) => call.method === 'terminal.sendText').at(-1)
 assert.equal(sent.params.enter, false, 'a blind terminal target must not execute the line')
-console.log(`ok  doctor typed ${JSON.stringify(sent.params.text)} into ${sent.params.terminalId} without Enter`)
+console.log(`ok  summary typed ${JSON.stringify(sent.params.text)} into ${sent.params.terminalId} without Enter`)
 
 const impact = await invokeCommand('impact-baseline')
 assert.deepEqual(impact.value, { sent: true, text: 'ecp impact --baseline origin/HEAD' })
