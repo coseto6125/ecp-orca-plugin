@@ -11,7 +11,7 @@ The plugin does not install ecp; its panel can type the install line for you.
 The plugin search box filters listings from registered sources; it is not an
 install field. Add this repo as a marketplace source instead:
 
-1. Settings → Plugins → 管理源 / Manage sources → add
+1. Settings → Plugins → Manage sources → add
    `https://github.com/coseto6125/ecp-orca-plugin.git` (ref `main`).
 2. Install **ECP Code Graph** from the listing and approve the consent dialog.
 
